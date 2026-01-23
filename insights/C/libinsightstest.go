@@ -1,3 +1,5 @@
+//go:build !generate
+
 // main is the package for the C API.
 package main
 
@@ -5,6 +7,8 @@ package main
 
 /*
 #include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
 #include "types.h"
 
 extern char* insights_collect(const insights_config*, const char*, const insights_collect_flags*, char**);
@@ -13,11 +17,82 @@ extern char* insights_write(const insights_config*, const char*, const char*, co
 extern char* insights_upload(const insights_config*, const char**, size_t, const insights_upload_flags*);
 extern insights_consent_state insights_get_consent_state(const insights_config*, const char*);
 extern char* insights_set_consent_state(const insights_config*, const char*, bool);
+extern void insights_set_log_callback(insights_logger_callback);
+
+// Test helpers for logging callback
+// Requires C11 or later for _Thread_local
+static _Thread_local int test_cb_count = 0;
+static _Thread_local char *test_cb_buf = NULL;
+static _Thread_local size_t test_cb_size = 0; // Current string length
+static _Thread_local size_t test_cb_cap = 0;  // Current buffer capacity
+
+static void append_log(const char* str) {
+    if (str == NULL) return;
+    size_t len = strlen(str);
+    size_t needed = test_cb_size + len + 1;
+
+    if (needed > test_cb_cap) {
+        size_t new_cap = test_cb_cap == 0 ? 1024 : test_cb_cap * 2;
+        while (new_cap < needed) new_cap *= 2;
+
+        char* new_buf = realloc(test_cb_buf, new_cap);
+        if (new_buf) {
+            test_cb_buf = new_buf;
+            test_cb_cap = new_cap;
+        } else {
+            return; // Allocation failed, drop log
+        }
+    }
+
+    if (test_cb_size == 0) test_cb_buf[0] = '\0';
+    strcat(test_cb_buf, str);
+    test_cb_size += len;
+}
+
+static void test_log_callback_fn(insights_log_level level, const char *msg) {
+    test_cb_count++;
+
+    const char* lvlStr = "UNKNOWN";
+    switch(level) {
+        case INSIGHTS_LOG_ERROR: lvlStr = "ERROR"; break;
+        case INSIGHTS_LOG_WARN:  lvlStr = "WARN";  break;
+        case INSIGHTS_LOG_INFO:  lvlStr = "INFO";  break;
+        case INSIGHTS_LOG_DEBUG: lvlStr = "DEBUG"; break;
+    }
+
+    if (msg != NULL) {
+        char line[1024];
+        snprintf(line, sizeof(line), "[%s] %s\n", lvlStr, msg);
+        append_log(line);
+    }
+}
+
+static insights_logger_callback get_test_callback() {
+    return test_log_callback_fn;
+}
+
+static void reset_test_callback() {
+    if (test_cb_buf) {
+        free(test_cb_buf);
+        test_cb_buf = NULL;
+    }
+    test_cb_count = 0;
+    test_cb_size = 0;
+    test_cb_cap = 0;
+}
+
+static int get_test_cb_count() { return test_cb_count; }
+
+static char* get_test_cb_buffer() {
+    return test_cb_buf;
+}
 */
 import "C"
 
 import (
 	"errors"
+	"log/slog"
+	"runtime"
 	"testing"
 	"unsafe"
 
@@ -689,4 +764,59 @@ func makeConfig(conf *insightsConfig) (cnf *C.insights_config, clean func()) {
 func TestMainImpl(t *testing.T) {
 	t.Parallel()
 	main()
+}
+
+// TestLogCallbackImpl tests that the log callback is correctly invoked.
+func TestLogCallbackImpl(t *testing.T) {
+	t.Parallel()
+
+	C.insights_set_log_callback(C.get_test_callback())
+
+	tests := map[string]struct {
+		logFunc func(l *slog.Logger)
+	}{
+		"Single call": {
+			logFunc: func(l *slog.Logger) {
+				l.Info("info message", "key", "val")
+			},
+		},
+		"Multiple calls mixed levels": {
+			logFunc: func(l *slog.Logger) {
+				l.Error("first error")
+				l.Info("then info")
+				l.Warn("finally warn", "code", 123)
+			},
+		},
+		"Debug logs are captured": {
+			logFunc: func(l *slog.Logger) {
+				l.Debug("debug details", "id", 123)
+			},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			// Lock this parallel test to an OS thread so that C._Thread_local storage is consistent
+			runtime.LockOSThread()
+			defer runtime.UnlockOSThread()
+
+			C.reset_test_callback()
+			defer C.reset_test_callback() // Ensure memory is freed when test finishes
+
+			// Mock collector that just logs
+			mockCollector := func(conf insights.Config, source string, flags insights.CollectFlags) ([]byte, error) {
+				tc.logFunc(conf.Logger)
+				return []byte("report"), nil
+			}
+
+			var outReport *C.char
+			collectCustomInsights(nil, nil, nil, &outReport, mockCollector)
+
+			logs := C.GoString(C.get_test_cb_buffer())
+
+			want := testutils.LoadWithUpdateFromGolden(t, logs)
+			assert.Equal(t, want, logs)
+		})
+	}
 }

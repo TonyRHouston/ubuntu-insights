@@ -11,6 +11,16 @@ typedef enum {
   INSIGHTS_CONSENT_TRUE = 1,
 } insights_consent_state;
 
+typedef enum {
+  INSIGHTS_LOG_ERROR = 0,
+  INSIGHTS_LOG_WARN = 1,
+  INSIGHTS_LOG_INFO = 2,
+  INSIGHTS_LOG_DEBUG = 3,
+} insights_log_level;
+
+typedef void (*insights_logger_callback)(insights_log_level level,
+                                         const char *msg);
+
 typedef struct {
   const char *consent_dir;  // default: "${os.UserConfigDir}/ubuntu-insights"
   const char *insights_dir; // default: "${os.UserCacheDir}/ubuntu-insights"
@@ -50,6 +60,7 @@ typedef struct {
 } insights_upload_flags;
 
 // Typedefs to be able to have `const` in Go (GNU style lowercase with
+
 // underscores).
 typedef const char insights_const_char;
 typedef const insights_config insights_const_config;
