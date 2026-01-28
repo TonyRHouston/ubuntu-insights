@@ -4,10 +4,6 @@ package main
 /*
 #include "types.h"
 #include <stdlib.h>
-
-void call_log_callback(insights_log_level level, char *msg);
-int has_log_callback();
-void set_log_callback_impl(insights_logger_callback callback);
 */
 import "C"
 
@@ -302,7 +298,7 @@ func insights_set_consent_state(config *C.insights_const_config, source *C.insig
 
 /**
  * insights_set_log_callback sets the callback function for logging.
- * The callback receives the log level and the message.
+ * The callback receives the log level and the null terminated message.
  * Setting the callback overrides the default logging behavior.
  * Pass NULL to reset to default behavior.
  *
@@ -311,7 +307,7 @@ func insights_set_consent_state(config *C.insights_const_config, source *C.insig
  */
 //export insights_set_log_callback
 func insights_set_log_callback(callback C.insights_logger_callback) {
-	C.set_log_callback_impl(callback)
+	setLogCallbackImpl(callback)
 }
 
 // consentSetter is a function that sets the consent state using the given parameters.
@@ -333,7 +329,7 @@ func setCustomConsentState(config *C.insights_const_config, source *C.insights_c
 // toGoInsightsConfig converts a C Insights Config into the equivalent Go structure.
 func toGoInsightsConfig(config *C.insights_const_config) insights.Config {
 	iConf := insights.Config{Logger: slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))}
-	if C.has_log_callback() != 0 {
+	if hasLogCallback() {
 		// If a callback is registered, use it with Debug level (capture all)
 		loggerOut := func(l slog.Level, msg string) {
 			level := C.INSIGHTS_LOG_ERROR
@@ -350,7 +346,7 @@ func toGoInsightsConfig(config *C.insights_const_config) insights.Config {
 
 			cMsg := C.CString(msg)
 			defer C.free(unsafe.Pointer(cMsg))
-			C.call_log_callback((C.insights_log_level)(level), cMsg)
+			callLogCallback((C.insights_log_level)(level), cMsg)
 		}
 		handler := NewCLogHandler(slog.HandlerOptions{Level: slog.LevelDebug}, loggerOut)
 		iConf.Logger = slog.New(handler)

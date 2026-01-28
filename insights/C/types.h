@@ -60,7 +60,6 @@ typedef struct {
 } insights_upload_flags;
 
 // Typedefs to be able to have `const` in Go (GNU style lowercase with
-
 // underscores).
 typedef const char insights_const_char;
 typedef const insights_config insights_const_config;
