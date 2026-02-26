@@ -126,7 +126,7 @@ jobs:
       matrix:
         ubuntu-version: ${{ fromJSON(needs.plan.outputs.ubuntu-versions) }}
         autopkgtest-host: ${{ fromJSON(needs.plan.outputs.autopkgtest-host) }}
-    runs-on: ${{ matrix.autopkgtest-host }}
+    runs-on: ubuntu-latest
     needs:
     - plan
     - build-ubuntu-insights
