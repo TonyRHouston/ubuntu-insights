@@ -30,7 +30,7 @@ jobs:
   go-sanity:
     name: 'Go: Code sanity'
     needs: plan
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
@@ -52,7 +52,7 @@ jobs:
   go-race-tests:
     name: 'Go: Race Tests'
     needs: plan
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
@@ -96,7 +96,7 @@ jobs:
   go-coverage-tests:
     name: 'Go: Coverage Tests'
     needs: plan
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
