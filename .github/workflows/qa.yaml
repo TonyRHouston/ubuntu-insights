@@ -1,273 +1,222 @@
 name: QA & sanity checks
 on:
-  push:
-    branches:
-      - main
-    tags:
-      - "*"
-  pull_request:
-  schedule:
-    # Weekly scan
-    - cron: "15 4 * * 1"
-
+  workflow_dispatch: {}
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
 env:
   DEBIAN_FRONTEND: noninteractive
   GO_TESTS_TIMEOUT: 30m
-  INSIGHTS_APT_DEPS: "libwayland-dev"
-  TICS_COVERAGE_RUNNER: "ubuntu-24.04" # Defines which coverage results we pass to TiCS. TiCS does not allow multiple reports per file
-  # RAW_MATRIX defines the OS/module matrix for jobs.
-  # The "server" module only supports ubuntu.
-  RAW_MATRIX: |
-    {
-      "os": ["ubuntu-24.04", "windows-2025", "macos-15-intel", "macos-15"],
-      "module": ["insights", "common"],
-      "include": [
-        {"os": "ubuntu-24.04", "module": "server"}
-      ]
-    }
-  PROJECT: ubuntu-insights # TiCS project name
-
+  INSIGHTS_APT_DEPS: libwayland-dev
+  TICS_COVERAGE_RUNNER: ubuntu-24.04
+  RAW_MATRIX: "{\n  \"os\": [\"ubuntu-24.04\", \"windows-2025\", \"macos-15-intel\"\
+    , \"macos-15\"],\n  \"module\": [\"insights\", \"common\"],\n  \"include\": [\n\
+    \    {\"os\": \"ubuntu-24.04\", \"module\": \"server\"}\n  ]\n}\n"
+  PROJECT: ubuntu-insights
 defaults:
   run:
     shell: bash
-
 jobs:
   plan:
-    # Dynamic matrix generation for subsequent jobs.
-    # The `env` context is not available in `strategy`, but `needs` is: https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#context-availability.
     name: Create test plan
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - id: set-matrix
-        run: |
-          echo "matrix=$(echo "${RAW_MATRIX}" | jq -c .)"  >> $GITHUB_OUTPUT
+    - id: set-matrix
+      run: 'echo "matrix=$(echo "${RAW_MATRIX}" | jq -c .)"  >> $GITHUB_OUTPUT
 
+        '
   go-sanity:
-    name: "Go: Code sanity"
+    name: 'Go: Code sanity'
     needs: plan
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     steps:
-      - name: Install dependencies on Linux
-        if: runner.os == 'Linux' && matrix.module == 'insights'
-        run: |
-          sudo apt update
-          sudo apt install -y ${{ env.INSIGHTS_APT_DEPS }}
-      - uses: actions/checkout@v6
-      - name: Go code sanity check
-        uses: canonical/desktop-engineering/gh-actions/go/code-sanity@v2
-        with:
-          working-directory: ${{ matrix.module }}
-          tools-directory: ${{ github.workspace }}/tools
-          golangci-lint-configfile: ${{ github.workspace }}/.golangci.yaml
+    - name: Install dependencies on Linux
+      if: runner.os == 'Linux' && matrix.module == 'insights'
+      run: 'sudo apt update
 
+        sudo apt install -y ${{ env.INSIGHTS_APT_DEPS }}
+
+        '
+    - uses: actions/checkout@v6
+    - name: Go code sanity check
+      uses: canonical/desktop-engineering/gh-actions/go/code-sanity@v2
+      with:
+        working-directory: ${{ matrix.module }}
+        tools-directory: ${{ github.workspace }}/tools
+        golangci-lint-configfile: ${{ github.workspace }}/.golangci.yaml
   go-race-tests:
-    name: "Go: Race Tests"
+    name: 'Go: Race Tests'
     needs: plan
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v6
-      - name: Prepare environment
-        uses: ./.github/actions/prepare-environment
-        with:
-          apt-dependencies: ${{ env.INSIGHTS_APT_DEPS }}
+    - uses: actions/checkout@v6
+    - name: Prepare environment
+      uses: ./.github/actions/prepare-environment
+      with:
+        apt-dependencies: ${{ env.INSIGHTS_APT_DEPS }}
+    - name: Install gotestfmt and our wrapper script
+      uses: canonical/desktop-engineering/gh-actions/go/gotestfmt@main
+    - name: Prepare test artifacts path
+      run: 'set -euo pipefail
 
-      - name: Install gotestfmt and our wrapper script
-        uses: canonical/desktop-engineering/gh-actions/go/gotestfmt@main
 
-      - name: Prepare test artifacts path
-        run: |
-          set -euo pipefail
+        artifacts_dir=${RUNNER_TEMP}/test-artifacts
 
-          artifacts_dir=${RUNNER_TEMP}/test-artifacts
-          mkdir -p "${artifacts_dir}"
-          echo TEST_ARTIFACTS_PATH="${artifacts_dir}" >> $GITHUB_ENV
+        mkdir -p "${artifacts_dir}"
 
-      - name: Run tests (with race detector)
-        working-directory: ${{ matrix.module }}
-        run: |
-          set -euo pipefail
+        echo TEST_ARTIFACTS_PATH="${artifacts_dir}" >> $GITHUB_ENV
 
-          # -json will sometimes write non-json warnings to stdout, especially on macOS with -race
-          # CGO_LDFLAGS="-w" could be set to suppress linker warnings, but it is better to see them.
-          # See https://github.com/golang/go/issues/74978 and https://github.com/golang/go/issues/61229 
-          # Print executed commands to ease debugging
-
-          go test -json -timeout "${GO_TESTS_TIMEOUT}" -race ./... \
-            | tee >(jq -r 'select(.Action == "build-output") | "WARNING: Build output action filtered out -> \(. | tostring)"' >&2) \
-            | jq -c 'select(.Action != "build-output")' \
-            | gotestfmt --logfile "${TEST_ARTIFACTS_PATH}/gotestfmt.race.log"
-
-      - name: Upload test artifacts
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: insights-${{ github.job }}-${{ matrix.module }}-${{ matrix.os }}-artifacts-${{ github.run_attempt }}
-          path: ${{ env.TEST_ARTIFACTS_PATH }}
-
+        '
+    - name: Run tests (with race detector)
+      working-directory: ${{ matrix.module }}
+      run: "set -euo pipefail\n\n# -json will sometimes write non-json warnings to\
+        \ stdout, especially on macOS with -race\n# CGO_LDFLAGS=\"-w\" could be set\
+        \ to suppress linker warnings, but it is better to see them.\n# See https://github.com/golang/go/issues/74978\
+        \ and https://github.com/golang/go/issues/61229 \n# Print executed commands\
+        \ to ease debugging\n\ngo test -json -timeout \"${GO_TESTS_TIMEOUT}\" -race\
+        \ ./... \\\n  | tee >(jq -r 'select(.Action == \"build-output\") | \"WARNING:\
+        \ Build output action filtered out -> \\(. | tostring)\"' >&2) \\\n  | jq\
+        \ -c 'select(.Action != \"build-output\")' \\\n  | gotestfmt --logfile \"\
+        ${TEST_ARTIFACTS_PATH}/gotestfmt.race.log\"\n"
+    - name: Upload test artifacts
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: insights-${{ github.job }}-${{ matrix.module }}-${{ matrix.os }}-artifacts-${{
+          github.run_attempt }}
+        path: ${{ env.TEST_ARTIFACTS_PATH }}
   go-coverage-tests:
-    name: "Go: Coverage Tests"
+    name: 'Go: Coverage Tests'
     needs: plan
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v6
-      - name: Prepare environment
-        uses: ./.github/actions/prepare-environment
-        with:
-          apt-dependencies: ${{ env.INSIGHTS_APT_DEPS }}
+    - uses: actions/checkout@v6
+    - name: Prepare environment
+      uses: ./.github/actions/prepare-environment
+      with:
+        apt-dependencies: ${{ env.INSIGHTS_APT_DEPS }}
+    - name: Install coverage test dependencies
+      run: 'go install github.com/boumenot/gocover-cobertura@latest
 
-      - name: Install coverage test dependencies
-        run: |
-          go install github.com/boumenot/gocover-cobertura@latest
+        '
+    - name: Install gotestfmt and our wrapper script
+      uses: canonical/desktop-engineering/gh-actions/go/gotestfmt@main
+    - name: Prepare test artifacts path
+      run: 'set -euo pipefail
 
-      - name: Install gotestfmt and our wrapper script
-        uses: canonical/desktop-engineering/gh-actions/go/gotestfmt@main
 
-      - name: Prepare test artifacts path
-        run: |
-          set -euo pipefail
+        artifacts_dir=${RUNNER_TEMP}/test-artifacts
 
-          artifacts_dir=${RUNNER_TEMP}/test-artifacts
-          mkdir -p "${artifacts_dir}"
-          echo TEST_ARTIFACTS_PATH="${artifacts_dir}" >> $GITHUB_ENV
+        mkdir -p "${artifacts_dir}"
 
-      - name: Run tests (with coverage collection)
-        working-directory: ${{ matrix.module }}
-        run: |
-          set -euo pipefail
+        echo TEST_ARTIFACTS_PATH="${artifacts_dir}" >> $GITHUB_ENV
 
-          cov_dir=${TEST_ARTIFACTS_PATH}/coverage
-          mkdir -p ${cov_dir}/codecov ${cov_dir}/raw
-
-          # Print executed commands to ease debugging
-          set -x
-
-          go test -json -shuffle=on -coverpkg=./... -coverprofile=${cov_dir}/raw/coverage.out -covermode=set ./... \
-            | gotestfmt --logfile "${TEST_ARTIFACTS_PATH}/gotestfmt.coverage.log"
-
-          # Filter out the testutils and testsdetection packages from the coverage report
-          grep -hv -e "testutils" -e "testsdetection" ${cov_dir}/raw/coverage.out > ${cov_dir}/codecov/coverage.out.codecov
-          gocover-cobertura < ${cov_dir}/codecov/coverage.out.codecov > ${cov_dir}/coverage.xml
-
-      - name: Upload test artifacts
-        uses: actions/upload-artifact@v6
-        with:
-          name: insights-${{ github.job }}-${{ matrix.module }}-${{ matrix.os }}-artifacts-${{ github.run_attempt }}
-          path: ${{ env.TEST_ARTIFACTS_PATH }}
-
+        '
+    - name: Run tests (with coverage collection)
+      working-directory: ${{ matrix.module }}
+      run: "set -euo pipefail\n\ncov_dir=${TEST_ARTIFACTS_PATH}/coverage\nmkdir -p\
+        \ ${cov_dir}/codecov ${cov_dir}/raw\n\n# Print executed commands to ease debugging\n\
+        set -x\n\ngo test -json -shuffle=on -coverpkg=./... -coverprofile=${cov_dir}/raw/coverage.out\
+        \ -covermode=set ./... \\\n  | gotestfmt --logfile \"${TEST_ARTIFACTS_PATH}/gotestfmt.coverage.log\"\
+        \n\n# Filter out the testutils and testsdetection packages from the coverage\
+        \ report\ngrep -hv -e \"testutils\" -e \"testsdetection\" ${cov_dir}/raw/coverage.out\
+        \ > ${cov_dir}/codecov/coverage.out.codecov\ngocover-cobertura < ${cov_dir}/codecov/coverage.out.codecov\
+        \ > ${cov_dir}/coverage.xml\n"
+    - name: Upload test artifacts
+      uses: actions/upload-artifact@v6
+      with:
+        name: insights-${{ github.job }}-${{ matrix.module }}-${{ matrix.os }}-artifacts-${{
+          github.run_attempt }}
+        path: ${{ env.TEST_ARTIFACTS_PATH }}
   process-coverage:
-    name: "Process code coverage"
+    name: Process code coverage
     needs: go-coverage-tests
-    if: always() # Run this even if coverage tests fail
+    if: always()
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+    - uses: actions/checkout@v6
+    - name: Download coverage artifacts
+      uses: actions/download-artifact@v7
+      with:
+        path: ./artifacts/
+    - name: Cleanup artifacts
+      run: '# Remove raw and unconverted coverage reports
 
-      - name: Download coverage artifacts
-        uses: actions/download-artifact@v7
-        with:
-          path: ./artifacts/
+        rm -rf ./artifacts/**/coverage/raw
 
-      - name: Cleanup artifacts
-        run: |
-          # Remove raw and unconverted coverage reports
-          rm -rf ./artifacts/**/coverage/raw
-          rm -rf ./artifacts/**/coverage/codecov
+        rm -rf ./artifacts/**/coverage/codecov
 
-      - name: Upload to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          directory: ./artifacts/
+        '
+    - name: Upload to Codecov
+      uses: codecov/codecov-action@v5
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        directory: ./artifacts/
+    - name: Determine TiCS run conditions
+      id: tics-condition
+      env:
+        TICSAUTHTOKEN: ${{ secrets.TICSAUTHTOKEN }}
+      run: "# When triggered by certain actors, such as Dependabot, the TiCS secret\
+        \ is not available.\nif [[ -z \"${TICSAUTHTOKEN}\" ]]; then\n  echo \"::warning::TiCS\
+        \ token not available\"\n  exit 0\nfi\n\n# Client mode is intentionally disabled\
+        \ due to how the results are hidden in the dashboard\nif [[ \"${{ github.event_name\
+        \ }}\" == \"push\" && \"${{ github.ref }}\" == \"refs/heads/main\" ]] || [[\
+        \ \"${{ github.event_name }}\" == \"schedule\" ]]; then\n  echo \"tics_mode=qserver\"\
+        \ >> $GITHUB_OUTPUT\nfi\n"
+    - name: Prepare environment for TiCS
+      if: ${{ steps.tics-condition.outputs.tics_mode != '' }}
+      uses: ./.github/actions/prepare-environment
+      with:
+        apt-dependencies: ${{ env.INSIGHTS_APT_DEPS }}
+        download-go-deps: true
+    - name: Install TiCS dependencies
+      if: ${{ steps.tics-condition.outputs.tics_mode != '' }}
+      run: 'set -euo pipefail
 
-      - name: Determine TiCS run conditions
-        id: tics-condition
-        env:
-          TICSAUTHTOKEN: ${{ secrets.TICSAUTHTOKEN }}
-        run: |
-          # When triggered by certain actors, such as Dependabot, the TiCS secret is not available.
-          if [[ -z "${TICSAUTHTOKEN}" ]]; then
-            echo "::warning::TiCS token not available"
-            exit 0
-          fi
+        go install honnef.co/go/tools/cmd/staticcheck@latest
 
-          # Client mode is intentionally disabled due to how the results are hidden in the dashboard
-          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]] || [[ "${{ github.event_name }}" == "schedule" ]]; then
-            echo "tics_mode=qserver" >> $GITHUB_OUTPUT
-          fi
+        '
+    - name: Process coverage reports
+      if: ${{ steps.tics-condition.outputs.tics_mode != '' }}
+      run: "set -euo pipefail\nmkdir -p ./coverage\n\n# Process each coverage report\
+        \ independently\n# TiCS may have issues with combined reports\nfor artifact\
+        \ in ./artifacts/*; do\n  artifact_name=$(basename \"$artifact\")\n\n  # TiCS\
+        \ can only match one coverage report per file\n  if [[ \"$artifact_name\"\
+        \ != *\"-${{ env.TICS_COVERAGE_RUNNER }}-artifacts-\"* ]]; then\n    echo\
+        \ \"Skipping artifact: $artifact_name (not from ${{ env.TICS_COVERAGE_RUNNER\
+        \ }})\"\n    continue\n  fi\n\n  coverage_file=\"$artifact/coverage/coverage.xml\"\
+        \n  \n  if [[ -f \"$coverage_file\" ]]; then\n    mv \"$coverage_file\" \"\
+        ./coverage/${artifact_name}-coverage.xml\"\n  else\n    if [[ \"$artifact_name\"\
+        \ == *\"coverage\"* ]]; then\n      # Only warn if the artifact name suggests\
+        \ it should contain coverage\n      echo \"::warning::Coverage file not found\
+        \ in artifact: $artifact_name\" \n    fi\n  fi\ndone\n"
+    - name: TiCS
+      if: ${{ steps.tics-condition.outputs.tics_mode != '' }}
+      uses: tiobe/tics-github-action@v3
+      with:
+        mode: ${{ steps.tics-condition.outputs.tics_mode }}
+        project: ${{ env.PROJECT }}
+        viewerUrl: https://canonical.tiobe.com/tiobeweb/TICS/api/cfg?name=GoProjects
+        ticsAuthToken: ${{ secrets.TICSAUTHTOKEN }}
+        installTics: true
+        postAnnotations: false
+    - if: ${{ steps.tics-condition.outputs.tics_mode == 'qserver' && cancelled() }}
+      name: Detach TiCS QServer to prevent "project already connected" issue
+      env:
+        TICSAUTHTOKEN: ${{ secrets.TICSAUTHTOKEN }}
+      run: 'source ~/.profile
 
-      - name: Prepare environment for TiCS
-        if: ${{ steps.tics-condition.outputs.tics_mode != '' }}
-        uses: ./.github/actions/prepare-environment
-        with:
-          apt-dependencies: ${{ env.INSIGHTS_APT_DEPS }}
-          download-go-deps: "true"
+        TICSMaintenance -project ${PROJECT} -detach
 
-      - name: Install TiCS dependencies
-        if: ${{ steps.tics-condition.outputs.tics_mode != '' }}
-        run: |
-          set -euo pipefail
-          go install honnef.co/go/tools/cmd/staticcheck@latest
-
-      - name: Process coverage reports
-        if: ${{ steps.tics-condition.outputs.tics_mode != '' }}
-        run: |
-          set -euo pipefail
-          mkdir -p ./coverage
-
-          # Process each coverage report independently
-          # TiCS may have issues with combined reports
-          for artifact in ./artifacts/*; do
-            artifact_name=$(basename "$artifact")
-
-            # TiCS can only match one coverage report per file
-            if [[ "$artifact_name" != *"-${{ env.TICS_COVERAGE_RUNNER }}-artifacts-"* ]]; then
-              echo "Skipping artifact: $artifact_name (not from ${{ env.TICS_COVERAGE_RUNNER }})"
-              continue
-            fi
-
-            coverage_file="$artifact/coverage/coverage.xml"
-            
-            if [[ -f "$coverage_file" ]]; then
-              mv "$coverage_file" "./coverage/${artifact_name}-coverage.xml"
-            else
-              if [[ "$artifact_name" == *"coverage"* ]]; then
-                # Only warn if the artifact name suggests it should contain coverage
-                echo "::warning::Coverage file not found in artifact: $artifact_name" 
-              fi
-            fi
-          done
-
-      - name: "TiCS"
-        if: ${{ steps.tics-condition.outputs.tics_mode != '' }}
-        uses: tiobe/tics-github-action@v3
-        with:
-          mode: ${{ steps.tics-condition.outputs.tics_mode }}
-          project: ${{ env.PROJECT }}
-          viewerUrl: https://canonical.tiobe.com/tiobeweb/TICS/api/cfg?name=GoProjects
-          ticsAuthToken: ${{ secrets.TICSAUTHTOKEN }}
-          installTics: true
-          postAnnotations: false # Often not useful due to just false positives hitting the GitHub 10 annotations limit
-
-      # Copied from https://github.com/canonical/mir/pull/4472/files
-      - if: ${{ steps.tics-condition.outputs.tics_mode == 'qserver' && cancelled() }}
-        name: Detach TiCS QServer to prevent "project already connected" issue
-        env:
-          TICSAUTHTOKEN: ${{ secrets.TICSAUTHTOKEN }}
-        run: |
-          source ~/.profile
-          TICSMaintenance -project ${PROJECT} -detach
+        '
