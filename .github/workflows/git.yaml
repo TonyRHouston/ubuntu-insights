@@ -1,15 +1,12 @@
 name: Git Checks
-
-on: [pull_request]
-
+on:
+  workflow_dispatch: {}
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
   block-fixup:
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v6
     - name: Block Fixup Commit Merge
